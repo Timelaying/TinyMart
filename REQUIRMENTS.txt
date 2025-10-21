@@ -1,0 +1,292 @@
+Project flow & phase requirements (light, realistic)
+✅ Phase 0 — Repo & plumbing (½ day)
+
+Create monorepo structure.
+
+Add Docker Compose (pg + all services).
+
+Linting/formatters:
+
+JS/TS: eslint + prettier
+
+Go: golangci-lint
+
+.NET: dotnet format
+
+Rust: cargo fmt/clippy
+
+Ruby: rubocop
+
+GitHub Actions: single workflow with jobs per stack.
+
+Exit: docker compose up → Postgres, gateway stub, each service logs “hello”.
+
+✅ Phase 1 — DB & schema (½ day)
+
+Add SQL migrations + seed products.
+
+Provide db/migrate.sh and a task db-migrate.
+
+Verify via psql or Inventory read.
+
+Exit: SELECT * FROM products; shows seeded rows.
+
+✅ Phase 2 — Minimal services (1 day)
+
+Inventory (Go)
+Endpoints:
+
+GET /products
+
+GET /products/{id}
+
+(Admin later: POST /products, PATCH /products/{id}/stock)
+
+TDD: handler table tests; repo tests.
+
+Orders (.NET 8)
+Endpoints:
+
+POST /orders body { items: [{productId, qty}] }
+
+GET /orders/{id}
+
+ACID tx (key bit):
+
+SELECT ... FOR UPDATE on products in request.
+
+Validate stock.
+
+Insert orders + order_items.
+
+UPDATE products SET stock_qty = stock_qty - ?.
+Isolation: start READ COMMITTED, discuss concurrency, show why row locks matter.
+
+Tests:
+
+Unit: totals calc.
+
+Integration: with test Postgres – race two orders for last unit; one succeeds.
+
+Payments (Rust/Axum)
+Endpoint:
+
+POST /charges with Idempotency-Key
+
+Behavior:
+
+Store key → result map (in-mem first).
+
+Return same result for same key.
+
+Status "succeeded" | "failed" (config 100% succeed for now).
+
+Tests: happy path + idempotency.
+
+Exit: curl proves products list, order placement decrements stock.
+
+✅ Phase 3 — GraphQL gateway (TS) (½ day)
+
+Schema:
+
+Query.products, Query.order(id)
+
+Mutation.placeOrder(input:{items:[...]})
+
+Resolvers call REST services.
+Tests: schema smoke + resolver with mocked fetchers.
+
+Exit: one GraphQL placeOrder creates an order across services.
+
+✅ Phase 4 — Admin UI (Rails) (½ day)
+
+CRUD Product
+
+Orders index
+
+“Capture Payment” button → calls Payments, then Orders to mark PAID.
+
+Tests: system test for product CRUD.
+
+Exit: Add a product in Admin → visible via Inventory/GraphQL → visible on Web.
+
+✅ Phase 5 — Web UI (TS) (½ day)
+
+/ list products (GraphQL).
+
+Cart (client state).
+
+Checkout → placeOrder → success page.
+
+Tests: RTL/Vitest: add to cart → checkout → show success.
+
+Exit: E2E happy path runs locally.
+
+✅ Phase 6 — CI/CD (½ day)
+
+GitHub Actions:
+
+Jobs: go, .net, rust, rails, node (gateway + web).
+
+On PR: lint + tests must pass.
+
+On main: build images (optionally push to GHCR).
+
+Branching: main protected; feature branches; required checks.
+
+Exit: PRs run all checks; merging builds Docker images.
+
+✅ Phase 7 — Interview polish (½ day)
+
+README:
+
+Architecture (Mermaid) + why polyglot.
+
+ACID/isolation demo: two concurrent orders; explain row locks.
+
+TDD coverage per service (short bullets).
+
+Trade-offs: REST (services) vs GraphQL (gateway), monorepo, Docker-first.
+
+Micro load test (k6/autocannon) + one index; write 3–5 lines of findings.
+
+Exit: Someone skimming README gets your story fast.
+
+7) API contracts (locked early)
+
+Inventory (Go)
+
+GET /products → [{id,name,price_cents,stock_qty}]
+
+GET /products/:id → {...}
+
+Orders (.NET)
+
+POST /orders → {orderId,status,total_cents}
+
+GET /orders/:id → {id,status,total_cents,items:[{product_id,qty,price_cents}]}
+
+(Optional) POST /orders/:id/capture → sets PAID after Payments success
+
+Payments (Rust)
+
+POST /charges
+Headers: Idempotency-Key
+Body: {order_id, amount_cents}
+Returns: {status, charge_id}
+
+GraphQL
+
+Query.products, Query.order(id: ID!)
+
+Mutation.placeOrder(input:{items:[{productId,qty}]})
+
+8) TDD plan (targeted, lightweight)
+
+Go: handler table tests; repo test against test DB or sqlmock.
+
+.NET: xUnit + FluentAssertions; integration with Testcontainers; concurrency race test.
+
+Rust: unit tests for handler + idempotency map.
+
+Rails: model validations; system test for product CRUD.
+
+GraphQL: resolver tests with mocked HTTP fetchers.
+
+Web: RTL/Vitest for cart & checkout.
+
+Keep each test small (<50 LOC). Prefer fast unit tests; 1–2 integration tests where correctness matters (Orders).
+
+9) CI workflow (what runs)
+
+go: go vet, go test
+
+dotnet: restore, build, test
+
+rust: fmt --check, clippy -D warnings, test
+
+rails: bring up ephemeral Postgres service, db:migrate, rspec/rake test
+
+node (gateway & web): npm ci, lint, test
+
+(Use the YAML from the previous message—already aligned.)
+
+10) Dev commands (Taskfile)
+
+task up → compose up
+
+task db-migrate → run SQL migrations
+
+task seed → seed products
+
+task test → run tests across stacks
+
+11) Concurrency & ACID interview demo (script)
+
+Seed Mug with stock_qty=1.
+
+Fire two simultaneous POST /orders for {Mug x1}.
+
+With SELECT ... FOR UPDATE, one wins; one returns “Insufficient stock”.
+
+Discuss:
+
+Row locks vs optimistic retries
+
+Isolation levels (why READ COMMITTED + locks works here)
+
+Idempotency at Payments
+
+12) Security & observability (just enough)
+
+Input validation everywhere (qty > 0, product exists).
+
+Request ID header from Gateway → services; log it.
+
+Logs:
+
+Go: slog/zap
+
+.NET: built-in + Serilog
+
+Rust: tracing
+
+No auth for dev; add API keys later if desired.
+
+13) Risks & mitigations
+
+Complexity creep → freeze scope (no users/auth, no carts server-side).
+
+Polyglot friction → Docker-first; per-service READMEs with run commands.
+
+Flaky tests → keep integration tests small; rely on unit tests.
+
+14) Definition of Done per phase
+
+P0: compose boots; “hello” logs for all services.
+
+P1: products visible via psql AND Inventory.
+
+P2: order placement decrements stock; tests pass.
+
+P3: GraphQL placeOrder works e2e (no UI).
+
+P4: Admin can create product; visible via GraphQL.
+
+P5: Web can checkout; shows success.
+
+P6: PR → CI green; main builds images.
+
+P7: README tells the story + demo steps.
+
+15) Backlog (do later if time)
+
+Redis cache for GET /products
+
+Rate limiting at Gateway
+
+Split DB schemas per service; service users/roles
+
+OpenTelemetry traces
+
+Simple deploy (Fly.io/Render/Railway)
